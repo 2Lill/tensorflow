@@ -91,7 +91,7 @@ vocabulary_size = 50000
 
 def build_dataset(words, n_words):
   """Process raw inputs into a dataset."""
-  count = [['UNK', -1]]
+  count = [('UNK', -1)]
   count.extend(collections.Counter(words).most_common(n_words - 1))
   dictionary = dict()
   for word, _ in count:
@@ -224,7 +224,7 @@ with graph.as_default():
     optimizer = tf.train.GradientDescentOptimizer(1.0).minimize(loss)
 
   # Compute the cosine similarity between minibatch examples and all embeddings.
-  norm = tf.sqrt(tf.reduce_sum(tf.square(embeddings), 1, keep_dims=True))
+  norm = tf.sqrt(tf.reduce_sum(tf.square(embeddings), 1, keepdims=True))
   normalized_embeddings = embeddings / norm
   valid_embeddings = tf.nn.embedding_lookup(normalized_embeddings,
                                             valid_dataset)

@@ -39,8 +39,8 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from tensorflow.python.distribute import distribution_strategy_context
 from tensorflow.python.eager import context
-from tensorflow.python.framework import ops
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import init_ops
 from tensorflow.python.ops import resource_variable_ops
@@ -112,7 +112,9 @@ def create_slot(primary, val, name, colocate_with_primary=True):
     prefix = primary.op.name
   with variable_scope.variable_scope(None, prefix + "/" + name):
     if colocate_with_primary:
-      with ops.colocate_with(primary):
+      distribution_strategy = (
+          distribution_strategy_context.get_distribution_strategy())
+      with distribution_strategy.colocate_vars_with(primary):
         return _create_slot_var(primary, val, "", validate_shape, None, None)
     else:
       return _create_slot_var(primary, val, "", validate_shape, None, None)
@@ -148,7 +150,9 @@ def create_slot_with_initializer(primary, initializer, shape, dtype, name,
     prefix = primary.op.name
   with variable_scope.variable_scope(None, prefix + "/" + name):
     if colocate_with_primary:
-      with ops.colocate_with(primary):
+      distribution_strategy = (
+          distribution_strategy_context.get_distribution_strategy())
+      with distribution_strategy.colocate_vars_with(primary):
         return _create_slot_var(primary, initializer, "", validate_shape, shape,
                                 dtype)
     else:

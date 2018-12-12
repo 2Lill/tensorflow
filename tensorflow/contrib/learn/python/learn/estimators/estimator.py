@@ -72,6 +72,7 @@ from tensorflow.python.saved_model import builder as saved_model_builder
 from tensorflow.python.saved_model import tag_constants
 from tensorflow.python.summary import summary as core_summary
 from tensorflow.python.training import basic_session_run_hooks
+from tensorflow.python.training import checkpoint_management
 from tensorflow.python.training import device_setter
 from tensorflow.python.training import monitored_session
 from tensorflow.python.training import saver
@@ -403,7 +404,6 @@ class BaseEstimator(sklearn.BaseEstimator, evaluable.Evaluable,
   Users should not instantiate or subclass this class. Instead, use an
   `Estimator`.
   """
-  __metaclass__ = abc.ABCMeta
 
   # Note that for Google users, this is overridden with
   # learn_runner.EstimatorConfig.
@@ -469,6 +469,20 @@ class BaseEstimator(sklearn.BaseEstimator, evaluable.Evaluable,
   def config(self):
     # TODO(wicke): make RunConfig immutable, and then return it without a copy.
     return copy.deepcopy(self._config)
+
+  @property
+  def model_fn(self):
+    """Returns the model_fn which is bound to self.params.
+
+    Returns:
+      The model_fn with the following signature:
+        `def model_fn(features, labels, mode, metrics)`
+    """
+
+    def public_model_fn(features, labels, mode, config):
+      return self._call_model_fn(features, labels, mode, config=config)
+
+    return public_model_fn
 
   @deprecated_args(SCIKIT_DECOUPLE_DATE, SCIKIT_DECOUPLE_INSTRUCTIONS,
                    ('x', None), ('y', None), ('batch_size', None))
@@ -877,7 +891,7 @@ class BaseEstimator(sklearn.BaseEstimator, evaluable.Evaluable,
 
     # Check that model has been trained (if nothing has been set explicitly).
     if not checkpoint_path:
-      latest_path = saver.latest_checkpoint(self._model_dir)
+      latest_path = checkpoint_management.latest_checkpoint(self._model_dir)
       if not latest_path:
         raise NotFittedError(
             "Couldn't find trained model at %s." % self._model_dir)
@@ -903,8 +917,8 @@ class BaseEstimator(sklearn.BaseEstimator, evaluable.Evaluable,
       if feed_fn:
         hooks.append(basic_session_run_hooks.FeedFnHook(feed_fn))
       if steps == 0:
-        logging.warning('evaluation steps are 0. If `input_fn` does not raise'
-                        'OutOfRangeError`, the evaluation will never stop.'
+        logging.warning('evaluation steps are 0. If `input_fn` does not raise '
+                        '`OutOfRangeError`, the evaluation will never stop. '
                         'Use steps=None if intended.')
       if steps:
         hooks.append(
@@ -942,7 +956,7 @@ class BaseEstimator(sklearn.BaseEstimator, evaluable.Evaluable,
                    as_iterable=True,
                    iterate_batches=False):
     # Check that model has been trained.
-    checkpoint_path = saver.latest_checkpoint(self._model_dir)
+    checkpoint_path = checkpoint_management.latest_checkpoint(self._model_dir)
     if not checkpoint_path:
       raise NotFittedError(
           "Couldn't find trained model at %s." % self._model_dir)
@@ -1052,11 +1066,11 @@ class BaseEstimator(sklearn.BaseEstimator, evaluable.Evaluable,
       chief_hooks = []
       if (self._config.save_checkpoints_secs or
           self._config.save_checkpoints_steps):
-        saver_hook_exists = any([
+        saver_hook_exists = any(
             isinstance(h, basic_session_run_hooks.CheckpointSaverHook)
             for h in (all_hooks + model_fn_ops.training_hooks + chief_hooks +
                       model_fn_ops.training_chief_hooks)
-        ])
+        )
         if not saver_hook_exists:
           chief_hooks = [
               basic_session_run_hooks.CheckpointSaverHook(
@@ -1179,7 +1193,7 @@ class Estimator(BaseEstimator):
     self._feature_engineering_fn = (
         feature_engineering_fn or _identity_feature_engineering_fn)
 
-  def _call_model_fn(self, features, labels, mode, metrics=None):
+  def _call_model_fn(self, features, labels, mode, metrics=None, config=None):
     """Calls model function with support of 2, 3 or 4 arguments.
 
     Args:
@@ -1187,6 +1201,7 @@ class Estimator(BaseEstimator):
       labels: labels dict.
       mode: ModeKeys
       metrics: Dict of metrics.
+      config: RunConfig.
 
     Returns:
       A `ModelFnOps` object. If model_fn returns a tuple, wraps them up in a
@@ -1203,7 +1218,10 @@ class Estimator(BaseEstimator):
     if 'params' in model_fn_args:
       kwargs['params'] = self.params
     if 'config' in model_fn_args:
-      kwargs['config'] = self.config
+      if config:
+        kwargs['config'] = config
+      else:
+        kwargs['config'] = self.config
     if 'model_dir' in model_fn_args:
       kwargs['model_dir'] = self.model_dir
     model_fn_results = self._model_fn(features, labels, **kwargs)
@@ -1346,7 +1364,7 @@ class Estimator(BaseEstimator):
 
     if not checkpoint_path:
       # Locate the latest checkpoint
-      checkpoint_path = saver.latest_checkpoint(self._model_dir)
+      checkpoint_path = checkpoint_management.latest_checkpoint(self._model_dir)
     if not checkpoint_path:
       raise NotFittedError(
           "Couldn't find trained model at %s." % self._model_dir)
@@ -1414,13 +1432,12 @@ class Estimator(BaseEstimator):
                            'must specify no transforms.')
         untransformed_tags = graph_rewrite_specs[0].tags
 
-        # TODO(soergel): switch to main_op or otherwise update when dust settles
         builder.add_meta_graph_and_variables(
             session,
             untransformed_tags,
             signature_def_map=signature_def_map,
             assets_collection=ops.get_collection(ops.GraphKeys.ASSET_FILEPATHS),
-            legacy_init_op=init_op,
+            main_op=init_op,
             strip_default_attrs=strip_default_attrs)
 
     # pylint: disable=protected-access
@@ -1476,7 +1493,7 @@ class Estimator(BaseEstimator):
 # pylint: disable=protected-access
 class SKCompat(sklearn.BaseEstimator):
   """Scikit learn wrapper for TensorFlow Learn Estimator.
-  
+
   THIS CLASS IS DEPRECATED. See
   [contrib/learn/README.md](https://www.tensorflow.org/code/tensorflow/contrib/learn/README.md)
   for general migration instructions.
